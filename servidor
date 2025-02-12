@@ -3,26 +3,41 @@ import asyncio
 from tcp import Servidor
 import re
 
+pending_messages = {}
 
 def validar_nome(nome):
     return re.match(br'^[a-zA-Z][a-zA-Z0-9_-]*$', nome) is not None
-
 
 def sair(conexao):
     print(conexao, 'conexão fechada')
     conexao.fechar()
 
+def responder_ping(conexao, raw_data):
+    conexao.enviar(b':server PONG server :' + raw_data.split(b' ', 1)[1])
 
 def dados_recebidos(conexao, dados):
     if dados == b'':
         return sair(conexao)
+    
     print(conexao, dados)
-
+    
+    buffer = pending_messages.get(conexao, b'') + dados
+    
+    while b'\r\n' in buffer:
+        comando, buffer = buffer.split(b'\r\n', 1)
+        
+        partes = comando.split(b' ', 1)
+        cmd = partes[0].decode('utf-8').upper()
+        params = partes[1] if len(partes) > 1 else b''
+        
+        if cmd == 'PING':
+            responder_ping(conexao, comando)
+    
+    pending_messages[conexao] = buffer if buffer else None
 
 def conexao_aceita(conexao):
     print(conexao, 'nova conexão')
     conexao.registrar_recebedor(dados_recebidos)
-
 
 servidor = Servidor(6667)
 servidor.registrar_monitor_de_conexoes_aceitas(conexao_aceita)
