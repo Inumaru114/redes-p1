@@ -3,138 +3,138 @@ import asyncio
 from tcp import Servidor
 import re
 
-def validar_nome(nome):
-    return re.match(br'^[a-zA-Z][a-zA-Z0-9_-]*$', nome) is not None
+def validar_identificador(ident):
+    return re.match(br'^[a-zA-Z]\w*$', ident) is not None
 
-def sair(conexao):
-    user = '*'
-    if conexao in list(connections.values()):
-        user = list(connections.keys())[list(connections.values()).index(conexao)]
+def encerrar_conexao(conex):
+    usuario = '*'
+    if conex in list(usuarios_ativos.values()):
+        usuario = next(k for k, v in usuarios_ativos.items() if v == conex)
 
-    s = []
-    for grp in groups.values():
-        if conexao in grp:
-            for connection in grp:
-                if conexao != connection and not connection in s:
-                    s.append(connection)
-        if conexao in grp:
-            grp.remove(conexao)
+    conexoes_relacionadas = []
+    for canal in canais.values():
+        if conex in canal:
+            for cliente in canal:
+                if cliente != conex and cliente not in conexoes_relacionadas:
+                    conexoes_relacionadas.append(cliente)
+            canal.remove(conex)
 
+    for cliente in conexoes_relacionadas:
+        cliente.enviar(f":{usuario} QUIT :Conexão encerrada\r\n".encode())
 
-    for friend in friends:
-        friend.enviar((f':{user} QUIT :Connetcion closer\r\n').encode('UTF-8'))
+    print(f'Conexão {conex} finalizada')
+    conex.fechar()
+    
+    if usuario in usuarios_ativos:
+        del usuarios_ativos[usuario]
 
-    print('conexão fechada')
-    conexao.fechar()
+def responder_ping(conex, conteudo):
+    _, _, payload = conteudo.partition(b' ')
+    resposta = f":servidor PONG servidor :{payload.decode().strip()}\r\n"
+    conex.enviar(resposta.encode())
 
-    del connections[user]
-
-def ping(conexao, conteudo_bruto):
-    parte_relevante = conteudo_bruto.split(b' ', 1)[1]
-    resposta = b':servidor PONG servidor :' + parte_relevante.strip() + b'\r\n'
-    conexao.enviar(resposta)
-
-def nick(conexao, dados):
-
-    # inválido
-    nickAtual = '*'
-    if conexao in list(connections.values()):
-        nickAtual = list(connections.keys())[list(connections.values()).index(conexao)]
-
-    if not(validar_nome(dados)):
-        conexao.enviar((f':server 432 {nickAtual} {dados} :Nickname inválido\r\n').encode('UTF-8'))
+def tratar_nick(conex, novo_nick):
+    nick_atual = next((k for k, v in usuarios_ativos.items() if v == conex), '*')
+    
+    if not validar_identificador(novo_nick.encode()):
+        conex.enviar(f":servidor 432 {nick_atual} {novo_nick} :Identificador inválido\r\n".encode())
         return
     
-    # Disponível
-    if not dados.lower() in [conn.lower() for conn in connections]:
-        if nickAtual == '*':
-            conexao.enviar((f':server 001 {dados} :Bem vindo\r\n').encode('UTF-8'))
-            conexao.enviar((f':server 422 {dados} :MOTD File is missing\r\n').encode('UTF-8'))
-        else:
-            conexao.enviar((f':{nickAtual} NICK {dados}\r\n').encode('UTF-8'))
-            del connections[nickAtual]
-        connections[dados.lower()] = conexao
-        return    
-
-    # Indísponível
+    if novo_nick.lower() in (k.lower() for k in usuarios_ativos):
+        conex.enviar(f":servidor 433 {nick_atual} {novo_nick} :Nick em uso\r\n".encode())
+        return
+    
+    if nick_atual != '*':
+        del usuarios_ativos[nick_atual]
+    usuarios_ativos[novo_nick.lower()] = conex
+    
+    if nick_atual == '*':
+        conex.enviar(f":servidor 001 {novo_nick} :Bem-vindo ao servidor\r\n".encode())
+        conex.enviar(f":servidor 422 {novo_nick} :MOTD indisponível\r\n".encode())
     else:
-        conexao.enviar((f':server 433 {nickAtual} {dados} :Nickname já está em uso\r\n').encode('UTF-8'))
-        return
+        conex.enviar(f":{nick_atual} NICK {novo_nick}\r\n".encode())
 
-def interpretar_mensagem(conexao, dados_crus):
-    segmentos = dados_crus.split(b' ', 1)
-    tipo_comando = segmentos[0].decode('utf-8', 'replace').strip().upper()
+def enviar_privado(conex, dados):
+    destinatario, _, mensagem = dados.partition(' ')
+    alvo = usuarios_ativos.get(destinatario.lower())
     
-    if tipo_comando == 'PING' and len(segmentos) > 1:
-        ping(conexao, dados_crus)
+    if alvo:
+        remetente = next((k for k, v in usuarios_ativos.items() if v == conex), '*')
+        alvo.enviar(f":{remetente} PRIVMSG {destinatario} :{mensagem}\r\n".encode())
 
-def processar_comando(conexao, mensagem):
-    partes = mensagem.split(b' ', 1)
-    comando = partes[0].decode('utf-8').upper()
+def enviar_grupo(conex, dados):
+    canal, _, mensagem = dados.partition(' ')
+    grupo = canais.get(canal.lower())
     
-    if comando == 'PING':
-        responder_ping(conexao, mensagem)
+    if grupo:
+        remetente = next((k for k, v in usuarios_ativos.items() if v == conex), '*')
+        for membro in grupo:
+            if membro != conex:
+                membro.enviar(f":{remetente} PRIVMSG {canal} :{mensagem}\r\n".encode())
 
-def dados_recebidos(conexao, dados):
-    if dados == b'':
-        print("Sem dados")
-        return sair(conexao)
-    print(conexao, dados)
-
-    if mensagens.get(conexao) is None:
-        mensagens[conexao] = dados
+def rotear_mensagem(conex, dados):
+    if dados.startswith('#'):
+        enviar_grupo(conex, dados)
     else:
-        mensagens[conexao] += dados
+        enviar_privado(conex, dados)
 
-    print(mensagens[conexao].decode('UTF-8').find('\r\n'))
-    if mensagens[conexao].decode('UTF-8').find('\r\n') < 0:
-        print(mensagens[conexao].decode('UTF-8'))
+def entrar_canal(conex, nome_canal):
+    if nome_canal[0] != '#' or not validar_identificador(nome_canal[1:].encode()):
+        conex.enviar(f":servidor 403 {nome_canal} :Canal inválido\r\n".encode())
         return
+    
+    canal = canais.setdefault(nome_canal.lower(), [])
+    if conex not in canal:
+        canal.append(conex)
+    
+    remetente = next((k for k, v in usuarios_ativos.items() if v == conex), '*')
+    for membro in canal:
+        membro.enviar(f":{remetente} JOIN {nome_canal}\r\n".encode())
+    
+    lista_membros = sorted([k for k, v in usuarios_ativos.items() if v in canal])
+    conex.enviar(f":servidor 353 {remetente} = {nome_canal} :{' '.join(lista_membros)}\r\n".encode())
+    conex.enviar(f":servidor 366 {remetente} {nome_canal} :Fim da lista\r\n".encode())
 
-    bin = mensagens[conexao]
-    new = bin.decode('UTF-8')
+def sair_canal(conex, nome_canal):
+    canal = canais.get(nome_canal.lower())
+    if canal and conex in canal:
+        canal.remove(conex)
+        remetente = next((k for k, v in usuarios_ativos.items() if v == conex), '*')
+        for membro in canal:
+            membro.enviar(f":{remetente} PART {nome_canal}\r\n".encode())
 
-    #print(new)
-    #new = str(dados)[2:-5].split(' ', 1)
+def processar_dados(conex, dados):
+    if not dados:
+        return encerrar_conexao(conex)
+    
+    buffer = getattr(conex, 'buffer', b'') + dados
+    while b'\r\n' in buffer:
+        linha, _, buffer = buffer.partition(b'\r\n')
+        partes = linha.decode().split(' ', 1)
+        comando = partes[0].upper()
+        parametros = partes[1] if len(partes) > 1 else ''
         
-    while '\r\n' in new:
+        if comando == 'PING':
+            responder_ping(conex, linha)
+        elif comando == 'NICK':
+            tratar_nick(conex, parametros.split()[0])
+        elif comando == 'PRIVMSG':
+            rotear_mensagem(conex, parametros)
+        elif comando == 'JOIN':
+            entrar_canal(conex, parametros.split()[0])
+        elif comando == 'PART':
+            sair_canal(conex, parametros.split()[0])
+    
+    conex.buffer = buffer
 
-        comando, new = new.split('\r\n', 1)
-        comando = comando.split(' ', 1)
+def nova_conexao(conex):
+    print(f'Nova conexão: {conex}')
+    conex.buffer = b''
+    conex.registrar_recebedor(lambda d: processar_dados(conex, d))
 
-        if comando[0] == 'PING':
-            msg = comando[0] + ' ' + comando[1] + '\r\n'
-            msg_encode = msg.encode('UTF-8')
-            ping(conexao, msg_encode)
-
-        if comando[0] == 'NICK':
-            nick(conexao, comando[1])
-
-        if comando[0] == 'PRIVMSG' or comando[0]=='msg':
-            print(comando)
-            send_message(conexao, comando[1])
-
-        if comando[0] == 'JOIN':
-            join_group(conexao, comando[1])
-
-        if comando[0] == 'PART':
-            leave_group(conexao, comando[1])
-
-        if comando[0] == 'grps':
-            print_users(conexao)
-
-    if(dadosTratados != ''):
-        mensagens[conexao] = new.encode("UTF-8")
-        return
-
-    del mensagens[conexao]
-
-def conexao_aceita(conexao):
-    print(conexao, 'nova conexão')
-    conexao.buffer = b''  # Cria buffer específico para cada conexão
-    conexao.registrar_recebedor(lambda dados: dados_recebidos(conexao, dados))
+usuarios_ativos = {}
+canais = {}
 
 servidor = Servidor(6667)
-servidor.registrar_monitor_de_conexoes_aceitas(conexao_aceita)
+servidor.registrar_monitor_de_conexoes_aceitas(nova_conexao)
 asyncio.get_event_loop().run_forever()
-connections = dict()
