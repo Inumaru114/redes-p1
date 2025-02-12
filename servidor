@@ -10,17 +10,44 @@ def sair(conexao):
     print(conexao, 'conexão fechada')
     conexao.fechar()
 
-def tratar_ping(conexao, conteudo_bruto):
+def ping(conexao, conteudo_bruto):
     parte_relevante = conteudo_bruto.split(b' ', 1)[1]
     resposta = b':servidor PONG servidor :' + parte_relevante.strip() + b'\r\n'
     conexao.enviar(resposta)
+
+def nick(conexao, dados):
+
+    # inválido
+    nickAtual = '*'
+    if conexao in list(connections.values()):
+        nickAtual = list(connections.keys())[list(connections.values()).index(conexao)]
+
+    if not(validar_nome(dados)):
+        conexao.enviar((f':server 432 {nickAtual} {dados} :Nickname inválido\r\n').encode('UTF-8'))
+        return
+    
+    # Disponível
+    if not dados.lower() in [conn.lower() for conn in connections]:
+        if nickAtual == '*':
+            conexao.enviar((f':server 001 {dados} :Bem vindo\r\n').encode('UTF-8'))
+            conexao.enviar((f':server 422 {dados} :MOTD File is missing\r\n').encode('UTF-8'))
+        else:
+            conexao.enviar((f':{nickAtual} NICK {dados}\r\n').encode('UTF-8'))
+            del connections[nickAtual]
+        connections[dados.lower()] = conexao
+        return    
+
+    # Indísponível
+    else:
+        conexao.enviar((f':server 433 {nickAtual} {dados} :Nickname já está em uso\r\n').encode('UTF-8'))
+        return
 
 def interpretar_mensagem(conexao, dados_crus):
     segmentos = dados_crus.split(b' ', 1)
     tipo_comando = segmentos[0].decode('utf-8', 'replace').strip().upper()
     
     if tipo_comando == 'PING' and len(segmentos) > 1:
-        tratar_ping(conexao, dados_crus)
+        ping(conexao, dados_crus)
 
 def processar_comando(conexao, mensagem):
     partes = mensagem.split(b' ', 1)
