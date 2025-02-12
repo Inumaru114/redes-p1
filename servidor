@@ -7,8 +7,27 @@ def validar_nome(nome):
     return re.match(br'^[a-zA-Z][a-zA-Z0-9_-]*$', nome) is not None
 
 def sair(conexao):
-    print(conexao, 'conexão fechada')
+    user = '*'
+    if conexao in list(connections.values()):
+        user = list(connections.keys())[list(connections.values()).index(conexao)]
+
+    s = []
+    for grp in groups.values():
+        if conexao in grp:
+            for connection in grp:
+                if conexao != connection and not connection in s:
+                    s.append(connection)
+        if conexao in grp:
+            grp.remove(conexao)
+
+
+    for friend in friends:
+        friend.enviar((f':{user} QUIT :Connetcion closer\r\n').encode('UTF-8'))
+
+    print('conexão fechada')
     conexao.fechar()
+
+    del connections[user]
 
 def ping(conexao, conteudo_bruto):
     parte_relevante = conteudo_bruto.split(b' ', 1)[1]
@@ -58,15 +77,57 @@ def processar_comando(conexao, mensagem):
 
 def dados_recebidos(conexao, dados):
     if dados == b'':
+        print("Sem dados")
         return sair(conexao)
-    
-    conexao.buffer += dados
-    
-    while b'\r\n' in conexao.buffer:
-        mensagem, _, resto = conexao.buffer.partition(b'\r\n')
-        conexao.buffer = resto
+    print(conexao, dados)
+
+    if mensagens.get(conexao) is None:
+        mensagens[conexao] = dados
+    else:
+        mensagens[conexao] += dados
+
+    print(mensagens[conexao].decode('UTF-8').find('\r\n'))
+    if mensagens[conexao].decode('UTF-8').find('\r\n') < 0:
+        print(mensagens[conexao].decode('UTF-8'))
+        return
+
+    bin = mensagens[conexao]
+    new = bin.decode('UTF-8')
+
+    #print(new)
+    #new = str(dados)[2:-5].split(' ', 1)
         
-        processar_comando(conexao, mensagem)
+    while '\r\n' in new:
+
+        comando, new = new.split('\r\n', 1)
+        comando = comando.split(' ', 1)
+
+        if comando[0] == 'PING':
+            msg = comando[0] + ' ' + comando[1] + '\r\n'
+            msg_encode = msg.encode('UTF-8')
+            ping(conexao, msg_encode)
+
+        if comando[0] == 'NICK':
+            nick(conexao, comando[1])
+
+        if comando[0] == 'PRIVMSG' or comando[0]=='msg':
+            print(comando)
+            send_message(conexao, comando[1])
+
+        if comando[0] == 'JOIN':
+            join_group(conexao, comando[1])
+
+        if comando[0] == 'PART':
+            leave_group(conexao, comando[1])
+
+        if comando[0] == 'grps':
+            print_users(conexao)
+
+    if(dadosTratados != ''):
+        mensagens[conexao] = new.encode("UTF-8")
+        return
+
+    del mensagens[conexao]
 
 def conexao_aceita(conexao):
     print(conexao, 'nova conexão')
@@ -76,3 +137,4 @@ def conexao_aceita(conexao):
 servidor = Servidor(6667)
 servidor.registrar_monitor_de_conexoes_aceitas(conexao_aceita)
 asyncio.get_event_loop().run_forever()
+connections = dict()
