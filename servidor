@@ -95,13 +95,23 @@ def entrar_canal(conex, nome_canal):
     conex.enviar(f":servidor 353 {remetente} = {nome_canal} :{' '.join(lista_membros)}\r\n".encode())
     conex.enviar(f":servidor 366 {remetente} {nome_canal} :Fim da lista\r\n".encode())
 
-def sair_canal(conex, nome_canal):
-    canal = canais.get(nome_canal.lower())
+def sair_canal(conex, parametros):
+    canal_nome = parametros.strip().split()[0].lower()
+    canal = canais.get(canal_nome)
+    
     if canal and conex in canal:
         canal.remove(conex)
-        remetente = next((k for k, v in usuarios_ativos.items() if v == conex), '*')
-        for membro in canal:
-            membro.enviar(f":{remetente} PART {nome_canal}\r\n".encode())
+        
+        nick = next((k for k, v in usuarios.items() if v == conex), '*')
+        
+        aviso = f":{nick} PART {canal_nome}\r\n".encode()
+        for participante in canal:
+            participante.enviar(aviso)
+        
+        conex.enviar(aviso)
+        
+        if not canal:
+            del canais[canal_nome]
 
 def processar_dados(conex, dados):
     if not dados:
