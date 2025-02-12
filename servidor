@@ -87,13 +87,17 @@ def entrar_canal(conex, nome_canal):
     if conex not in canal:
         canal.append(conex)
     
-    remetente = next((k for k, v in usuarios_ativos.items() if v == conex), '*')
+    nick = next((k for k, v in usuarios_ativos.items() if v == conex), '*')
     for membro in canal:
-        membro.enviar(f":{remetente} JOIN {nome_canal}\r\n".encode())
+        membro.enviar(f":{nick} JOIN {nome_canal}\r\n".encode())
     
-    lista_membros = sorted([k for k, v in usuarios_ativos.items() if v in canal])
-    conex.enviar(f":servidor 353 {remetente} = {nome_canal} :{' '.join(lista_membros)}\r\n".encode())
-    conex.enviar(f":servidor 366 {remetente} {nome_canal} :Fim da lista\r\n".encode())
+    membros = sorted([
+        usuario for usuario, conn in usuarios_ativos.items() 
+        if conn in canal
+    ])
+    conex.enviar(f":servidor 353 {nick} = {nome_canal} :{' '.join(membros)}\r\n".encode())
+    
+    conex.enviar(f":servidor 366 {nick} {nome_canal} :Fim da lista\r\n".encode())
 
 def sair_canal(conex, parametros):
     canal_nome = parametros.strip().split()[0].lower()
