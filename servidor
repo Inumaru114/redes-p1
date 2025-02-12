@@ -4,7 +4,7 @@ from tcp import Servidor
 import re
 
 def validar_identificador(ident):
-    return re.match(br'^[a-zA-Z]\w*$', ident) is not None
+    return re.match(br'^[a-zA-Z][a-zA-Z0-9_-]*$', ident) is not None
 
 def encerrar_conexao(conex):
     usuario = '*'
@@ -54,6 +54,9 @@ def tratar_nick(conex, novo_nick):
     else:
         conex.enviar(f":{nick_atual} NICK {novo_nick}\r\n".encode())
 
+def formatar_mensagem_join(nick, canal):
+    return f":{nick} JOIN :#{canal}\r\n".encode()
+
 def enviar_privado(conex, dados):
     destinatario, _, mensagem = dados.partition(' ')
     alvo = usuarios_ativos.get(destinatario.lower())
@@ -70,13 +73,20 @@ def enviar_grupo(conex, dados):
         remetente = next((k for k, v in usuarios_ativos.items() if v == conex), '*')
         for membro in grupo:
             if membro != conex:
-                membro.enviar(f":{remetente} PRIVMSG {canal} :{mensagem}\r\n".encode())
+                mensagem_formatada = f":{remetente} PRIVMSG {canal} :{mensagem}\r\n".encode()
+                membro.enviar(mensagem_formatada)
 
 def rotear_mensagem(conex, dados):
     if dados.startswith('#'):
         enviar_grupo(conex, dados)
     else:
         enviar_privado(conex, dados)
+
+def listar_canais(conex):
+    canais_formatados = ' '.join([f"#{nome}" for nome in canais.keys()])
+    conex.enviar(f":servidor 321 {conex} Lista de canais :\r\n".encode())
+    conex.enviar(f":servidor 322 {conex} {canais_formatados} :Canais ativos\r\n".encode())
+    conex.enviar(f":servidor 323 {conex} :Fim da lista\r\n".encode())
 
 def entrar_canal(conex, nome_canal):
     if nome_canal[0] != '#' or not validar_identificador(nome_canal[1:].encode()):
@@ -88,16 +98,16 @@ def entrar_canal(conex, nome_canal):
         canal.append(conex)
     
     nick = next((k for k, v in usuarios_ativos.items() if v == conex), '*')
+    
+    # Envia JOIN formatado corretamente
+    msg_join = formatar_mensagem_join(nick, nome_canal[1:])
     for membro in canal:
-        membro.enviar(f":{nick} JOIN {nome_canal}\r\n".encode())
+        membro.enviar(msg_join)
     
-    membros = sorted([
-        usuario for usuario, conn in usuarios_ativos.items() 
-        if conn in canal
-    ])
+    # Lista de membros
+    membros = sorted([u for u, c in usuarios_ativos.items() if c in canal])
     conex.enviar(f":servidor 353 {nick} = {nome_canal} :{' '.join(membros)}\r\n".encode())
-    
-    conex.enviar(f":servidor 366 {nick} {nome_canal} :Fim da lista\r\n".encode())
+    conex.enviar(f":servidor 366 {nick} {nome_canal} :Fim da listagem\r\n".encode())
 
 def sair_canal(conex, parametros):
     canal_nome = parametros.strip().split()[0].lower()
@@ -106,9 +116,9 @@ def sair_canal(conex, parametros):
     if canal and conex in canal:
         canal.remove(conex)
         
-        nick = next((k for k, v in usuarios.items() if v == conex), '*')
-        
+        nick = next((k for k, v in usuarios_ativos.items() if v == conex), '*')
         aviso = f":{nick} PART {canal_nome}\r\n".encode()
+        
         for participante in canal:
             participante.enviar(aviso)
         
@@ -137,7 +147,9 @@ def processar_dados(conex, dados):
         elif comando == 'JOIN':
             entrar_canal(conex, parametros.split()[0])
         elif comando == 'PART':
-            sair_canal(conex, parametros.split()[0])
+            sair_canal(conex, parametros)
+        elif comando == 'LISTA':
+            listar_canais(conex)
     
     conex.buffer = buffer
 
