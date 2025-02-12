@@ -10,32 +10,41 @@ def sair(conexao):
     print(conexao, 'conexão fechada')
     conexao.fechar()
 
-def responder_ping(conexao, raw_data):
-    conexao.enviar(b':server PONG server :' + raw_data.split(b' ', 1)[1])
+def tratar_ping(conexao, conteudo_bruto):
+    parte_relevante = conteudo_bruto.split(b' ', 1)[1]
+    resposta = b':servidor PONG servidor :' + parte_relevante.strip() + b'\r\n'
+    conexao.enviar(resposta)
+
+def interpretar_mensagem(conexao, dados_crus):
+    segmentos = dados_crus.split(b' ', 1)
+    tipo_comando = segmentos[0].decode('utf-8', 'replace').strip().upper()
+    
+    if tipo_comando == 'PING' and len(segmentos) > 1:
+        tratar_ping(conexao, dados_crus)
+
+def processar_comando(conexao, mensagem):
+    partes = mensagem.split(b' ', 1)
+    comando = partes[0].decode('utf-8').upper()
+    
+    if comando == 'PING':
+        responder_ping(conexao, mensagem)
 
 def dados_recebidos(conexao, dados):
     if dados == b'':
         return sair(conexao)
     
-    print(conexao, dados)
+    conexao.buffer += dados
     
-    buffer = pending_messages.get(conexao, b'') + dados
-    
-    while b'\r\n' in buffer:
-        comando, buffer = buffer.split(b'\r\n', 1)
+    while b'\r\n' in conexao.buffer:
+        mensagem, _, resto = conexao.buffer.partition(b'\r\n')
+        conexao.buffer = resto
         
-        partes = comando.split(b' ', 1)
-        cmd = partes[0].decode('utf-8').upper()
-        params = partes[1] if len(partes) > 1 else b''
-        
-        if cmd == 'PING':
-            responder_ping(conexao, comando)
-    
-    pending_messages[conexao] = buffer if buffer else None
+        processar_comando(conexao, mensagem)
 
 def conexao_aceita(conexao):
     print(conexao, 'nova conexão')
-    conexao.registrar_recebedor(dados_recebidos)
+    conexao.buffer = b''  # Cria buffer específico para cada conexão
+    conexao.registrar_recebedor(lambda dados: dados_recebidos(conexao, dados))
 
 servidor = Servidor(6667)
 servidor.registrar_monitor_de_conexoes_aceitas(conexao_aceita)
